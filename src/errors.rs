@@ -27,6 +27,10 @@ pub enum RustusError {
     RedisError(#[from] redis::RedisError),
     #[error("Redis pooling error: {0}")]
     MobcError(#[from] mobc::Error<redis::RedisError>),
+    #[error("Postgres error: {0}")]
+    PostgresError(#[from] tokio_postgres::Error),
+    #[error("Postgres pooling error: {0}")]
+    PostgresPoolError(#[from] mobc::Error<tokio_postgres::Error>),
     #[error("Unable to get file information")]
     UnableToReadInfo,
     #[error("Unable to write file {0}")]
