@@ -15,6 +15,8 @@ pub enum AvailableInfoStorages {
     Files,
     #[display("redis-info-storage")]
     Redis,
+    #[display("postgres-info-storage")]
+    Postgres,
 }
 
 from_str!(AvailableInfoStorages, "info storage");
@@ -23,6 +25,7 @@ from_str!(AvailableInfoStorages, "info storage");
 pub enum InfoStorageImpl {
     File(impls::file_storage::FileInfoStorage),
     Redis(impls::redis_storage::RedisInfoStorage),
+    Postgres(impls::postgres_storage::PostgresInfoStorage),
 }
 
 impl AvailableInfoStorages {
@@ -49,6 +52,17 @@ impl AvailableInfoStorages {
                     config.info_storage_opts.redis_info_expiration,
                 )?,
             )),
+            Self::Postgres => Ok(InfoStorageImpl::Postgres(
+                impls::postgres_storage::PostgresInfoStorage::new(&impls::postgres_storage::PostgresInfoStorageConfig {
+                    host: config.info_storage_opts.postgres_info_host[0].clone(),
+                    port: config.info_storage_opts.postgres_info_port[0].clone(),
+                    user: config.info_storage_opts.postgres_info_user.clone().unwrap(),
+                    password: config.info_storage_opts.postgres_info_password.clone().unwrap(),
+                    db_name: config.info_storage_opts.postgres_info_dbname.clone().unwrap(),
+                    table_name: config.info_storage_opts.postgres_info_table_name.clone().unwrap(),
+                    schema_name: config.info_storage_opts.postgres_info_schema_name.clone().unwrap(),
+                })?,
+            )),
         }
     }
 }
@@ -58,6 +72,7 @@ impl base::InfoStorage for InfoStorageImpl {
         match self {
             Self::File(storage) => storage.prepare().await,
             Self::Redis(storage) => storage.prepare().await,
+            Self::Postgres(storage) => storage.prepare().await,
         }
     }
 
@@ -69,6 +84,7 @@ impl base::InfoStorage for InfoStorageImpl {
         match self {
             Self::File(storage) => storage.set_info(file_info, create).await,
             Self::Redis(storage) => storage.set_info(file_info, create).await,
+            Self::Postgres(storage) => storage.set_info(file_info, create).await,
         }
     }
 
@@ -76,6 +92,7 @@ impl base::InfoStorage for InfoStorageImpl {
         match self {
             Self::File(storage) => storage.get_info(file_id).await,
             Self::Redis(storage) => storage.get_info(file_id).await,
+            Self::Postgres(storage) => storage.get_info(file_id).await,
         }
     }
 
@@ -83,6 +100,7 @@ impl base::InfoStorage for InfoStorageImpl {
         match self {
             Self::File(storage) => storage.remove_info(file_id).await,
             Self::Redis(storage) => storage.remove_info(file_id).await,
+            Self::Postgres(storage) => storage.remove_info(file_id).await,
         }
     }
 }

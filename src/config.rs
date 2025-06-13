@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf, net::IpAddr};
 
 use clap::Parser;
 
@@ -176,6 +176,79 @@ pub struct InfoStoreOptions {
 
     #[arg(long, env = "RUSTUS_REDIS_INFO_EXPIRATION")]
     pub redis_info_expiration: Option<usize>,
+
+    /// PostgreSQL database user
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_USER")]
+    pub(crate) postgres_info_user: Option<String>,
+    
+    /// PostgreSQL database password (base64 encoded)
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_PASSWORD")]
+    pub(crate) postgres_info_password: Option<String>,
+
+    /// PostgreSQL database name
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_DB_NAME")]
+    pub(crate) postgres_info_dbname: Option<String>,
+
+    /// PostgreSQL table name
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_TABLE_NAME")]
+    pub(crate) postgres_info_table_name: Option<String>,
+
+    /// PostgreSQL schema name
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_SCHEMA_NAME")]
+    pub(crate) postgres_info_schema_name: Option<String>,
+
+    /// PostgreSQL connection options
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_OPTIONS")]
+    pub(crate) postgres_info_options: Option<String>,
+
+    /// PostgreSQL application name
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_APPLICATION_NAME")]
+    pub(crate) postgres_info_application_name: Option<String>,
+
+    /// PostgreSQL SSL mode (disable, allow, prefer, require, verify-ca, verify-full)
+    #[arg(long, default_value = "disable", env = "RUSTUS_POSTGRES_INFO_SSL_MODE")]
+    pub(crate) postgres_info_ssl_mode: String,
+
+    /// PostgreSQL SSL negotiation mode (postgres, direct)
+    #[arg(long, default_value = "postgres", env = "RUSTUS_POSTGRES_INFO_SSL_NEGOTIATION")]
+    pub(crate) postgres_info_ssl_negotiation: String,
+
+    /// PostgreSQL hosts (comma-separated)
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_HOSTS", use_value_delimiter = true)]
+    pub(crate) postgres_info_host: Vec<String>,
+
+    /// PostgreSQL host addresses (comma-separated)
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_HOST_ADDRS", use_value_delimiter = true)]
+    pub(crate) postgres_info_hostaddr: Vec<IpAddr>,
+
+    /// PostgreSQL ports (comma-separated)
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_PORTS", use_value_delimiter = true)]
+    pub(crate) postgres_info_port: Vec<u16>,
+
+    /// PostgreSQL connection timeout in seconds
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_CONNECT_TIMEOUT")]
+    pub(crate) postgres_info_connect_timeout: Option<u64>,
+
+    /// PostgreSQL TCP user timeout in seconds
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_TCP_USER_TIMEOUT")]
+    pub(crate) postgres_info_tcp_user_timeout: Option<u64>,
+
+    /// Enable PostgreSQL keepalives
+    #[arg(long, env = "RUSTUS_POSTGRES_INFO_KEEPALIVES")]
+    pub(crate) postgres_info_keepalives: bool,
+
+    /// PostgreSQL target session attributes (any, read-write, read-only, primary, standby, prefer-standby)
+    #[arg(long, default_value = "any", env = "RUSTUS_POSTGRES_INFO_TARGET_SESSION_ATTRS")]
+    pub(crate) postgres_info_target_session_attrs: String,
+
+    /// PostgreSQL channel binding (disable, allow, prefer, require)
+    #[arg(long, default_value = "prefer", env = "RUSTUS_POSTGRES_INFO_CHANNEL_BINDING")]
+    pub(crate) postgres_info_channel_binding: String,
+
+    /// PostgreSQL load balance hosts (disable, random)
+    #[arg(long, default_value = "disable", env = "RUSTUS_POSTGRES_INFO_LOAD_BALANCE_HOSTS")]
+    pub(crate) postgres_info_load_balance_hosts: String,
+
 }
 #[derive(Parser, Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]

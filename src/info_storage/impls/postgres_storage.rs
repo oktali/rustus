@@ -1,4 +1,5 @@
 use mobc::{Manager, Pool, async_trait};
+use tokio_postgres::config::SslMode;
 use tokio_postgres::tls::{MakeTlsConnect, TlsConnect, NoTls};
 use tokio_postgres::{Client, Config, Error, Socket};
 
@@ -44,8 +45,21 @@ where
 }
 
 #[derive(Clone, Debug)]
+pub struct PostgresInfoStorageConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub db_name: String,
+    pub table_name: String,
+    pub schema_name: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct PostgresInfoStorage {
     pool: Pool<PgConnectionManager<NoTls>>,
+    table_name: String,
+    schema_name: String,
 }
 
 impl PostgresInfoStorage {
@@ -54,59 +68,107 @@ impl PostgresInfoStorage {
     /// # Errors
     ///
     /// Might return an error, if postgres client cannot be created.
-    pub fn new(db_dsn: &str, _expiration: Option<usize>) -> RustusResult<Self> {
-        let config = db_dsn.parse::<Config>().map_err(|e| RustusError::UnableToPrepareInfoStorage(e.to_string()))?;
-        let manager = PgConnectionManager::new(config, NoTls);
+    pub fn new(config: &PostgresInfoStorageConfig) -> RustusResult<Self> {
+        let mut new_pg_config = Config::new();
+        let pg_config = new_pg_config
+            .host(&config.host)
+            .port(config.port)
+            .user(&config.user)
+            .password(&config.password)
+            .dbname(&config.db_name)
+            .ssl_mode(SslMode::Disable);
+        let manager = PgConnectionManager::new(pg_config.clone(), NoTls);
         let pool = mobc::Pool::builder().max_open(100).build(manager);
-        Ok(Self { pool })
+        Ok(Self { pool, table_name: config.table_name.clone(), schema_name: config.schema_name.clone() })
     }
 }
 
 impl InfoStorage for PostgresInfoStorage {
     async fn prepare(&mut self) -> RustusResult<()> {
-        let create_table_query = r#"
-        CREATE TABLE IF NOT EXISTS file_info (
+        let create_table_query = format!(r#"
+        CREATE TABLE IF NOT EXISTS {}.{} (
             id TEXT PRIMARY KEY,
-            info JSONB NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-        )"#;
+            "offset" BIGINT NOT NULL,
+            length BIGINT,
+            path TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            deferred_size BOOLEAN NOT NULL,
+            is_partial BOOLEAN NOT NULL,
+            is_final BOOLEAN NOT NULL,
+            parts TEXT[],
+            storage TEXT NOT NULL,
+            metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb
+        )"#, self.schema_name, self.table_name);
 
         let conn = self.pool.get().await?;
-        conn.execute(create_table_query, &[]).await?;
+        conn.execute(&create_table_query, &[]).await?;
         Ok(())
     }
 
     async fn set_info(&self, file_info: &FileInfo, create: bool) -> RustusResult<()> {
-        let json_info = serde_json::to_string(file_info)?;
+        let metadata_json = serde_json::to_value(&file_info.metadata)?;
         let conn = self.pool.get().await?;
 
         if create {
             // Insert new record
-            let query = r#"
-            INSERT INTO file_info (id, info)
-            VALUES ($1, $2)
-            "#;
-            
+            let query = format!(r#"
+            INSERT INTO {}.{} (id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#, self.schema_name, self.table_name);
+
+            let length_param: Option<i64> = file_info.length.map(|l| l as i64);
+            let parts_param: Option<Vec<String>> = file_info.parts.clone();
+
             conn.execute(
-                query,
+                &query,
                 &[
                     &file_info.id,
-                    &json_info,
+                    &(file_info.offset as i64),
+                    &length_param,
+                    &file_info.path,
+                    &file_info.created_at,
+                    &file_info.deferred_size,
+                    &file_info.is_partial,
+                    &file_info.is_final,
+                    &parts_param,
+                    &file_info.storage,
+                    &metadata_json,
                 ],
             ).await?;
         } else {
             // Update existing record
-            let query = r#"
-            UPDATE file_info
-            SET info = $2
+            let query = format!(r#"
+            UPDATE {}.{} SET 
+                "offset" = $2,
+                length = $3,
+                path = $4,
+                created_at = $5,
+                deferred_size = $6,
+                is_partial = $7,
+                is_final = $8,
+                parts = $9,
+                storage = $10,
+                metadata = $11
             WHERE id = $1
-            "#;
-            
+            "#, self.schema_name, self.table_name);
+
+            let length_param: Option<i64> = file_info.length.map(|l| l as i64);
+            let parts_param: Option<Vec<String>> = file_info.parts.clone();
+
             let result = conn.execute(
-                query,
+                &query,
                 &[
                     &file_info.id,
-                    &json_info,
+                    &(file_info.offset as i64),
+                    &length_param,
+                    &file_info.path,
+                    &file_info.created_at,
+                    &file_info.deferred_size,
+                    &file_info.is_partial,
+                    &file_info.is_final,
+                    &parts_param,
+                    &file_info.storage,
+                    &metadata_json,
                 ],
             ).await?;
 
@@ -120,18 +182,45 @@ impl InfoStorage for PostgresInfoStorage {
 
     async fn get_info(&self, file_id: &str) -> RustusResult<FileInfo> {
         let conn = self.pool.get().await?;
-        
-        let query = r#"
-        SELECT info FROM file_info
+
+        let query = format!(r#"
+        SELECT id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata 
+        FROM {}.{}
         WHERE id = $1
-        "#;
-        
-        let row = conn.query_opt(query, &[&file_id]).await?;
+        "#, self.schema_name, self.table_name);
+
+        let row = conn.query_opt(&query, &[&file_id]).await?;
         
         match row {
             Some(row) => {
-                let json_info: String = row.get(0);
-                let file_info = serde_json::from_str(&json_info)?;
+                let id: String = row.get(0);
+                let offset: i64 = row.get(1);
+                let length: Option<i64> = row.get(2);
+                let path: Option<String> = row.get(3);
+                let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
+                let deferred_size: bool = row.get(5);
+                let is_partial: bool = row.get(6);
+                let is_final: bool = row.get(7);
+                let parts: Option<Vec<String>> = row.get(8);
+                let storage: String = row.get(9);
+                let metadata_json: serde_json::Value = row.get(10);
+                
+                let metadata: std::collections::HashMap<String, String> = serde_json::from_value(metadata_json)?;
+                
+                let file_info = FileInfo {
+                    id,
+                    offset: offset as usize,
+                    length: length.map(|l| l as usize),
+                    path,
+                    created_at,
+                    deferred_size,
+                    is_partial,
+                    is_final,
+                    parts,
+                    storage,
+                    metadata,
+                };
+                
                 Ok(file_info)
             }
             None => Err(RustusError::FileNotFound),
@@ -140,14 +229,14 @@ impl InfoStorage for PostgresInfoStorage {
 
     async fn remove_info(&self, file_id: &str) -> RustusResult<()> {
         let conn = self.pool.get().await?;
-        
-        let query = r#"
-        DELETE FROM file_info
+
+        let query = format!(r#"
+        DELETE FROM {}.{}
         WHERE id = $1
-        "#;
-        
-        let result = conn.execute(query, &[&file_id]).await?;
-        
+        "#, self.schema_name, self.table_name);
+
+        let result = conn.execute(&query, &[&file_id]).await?;
+
         match result {
             0 => Err(RustusError::FileNotFound),
             _ => Ok(()),
@@ -157,16 +246,25 @@ impl InfoStorage for PostgresInfoStorage {
 
 #[cfg(test)]
 mod tests {
+
     use crate::{file_info::FileInfo, info_storage::base::InfoStorage};
     use super::PostgresInfoStorage;
+    use super::PostgresInfoStorageConfig;
 
-    fn get_url() -> String {
-        std::env::var("TEST_POSTGRES_URL")
-            .unwrap_or("postgres://postgres:postgres@localhost/rustus".to_string())
+    fn get_config() -> PostgresInfoStorageConfig {
+        PostgresInfoStorageConfig {
+            host: "localhost".into(),
+            user: "postgres".into(),
+            password: "postgres".into(),
+            db_name: "rustus".into(),
+            port: 5432,
+            table_name: "file_info".into(),
+            schema_name: "public".into(),
+        }
     }
 
     async fn get_storage() -> PostgresInfoStorage {
-        let mut storage = PostgresInfoStorage::new(get_url().as_str(), None).unwrap();
+        let mut storage = PostgresInfoStorage::new(&get_config()).unwrap();
         storage.prepare().await.unwrap();
         storage
     }
@@ -190,7 +288,9 @@ mod tests {
 
     #[actix_rt::test]
     async fn no_connection() {
-        let info_storage = PostgresInfoStorage::new("postgres://unknown_user:password@unknown_host/db", None).unwrap();
+        let mut config = get_config();
+        config.host = "invalid_host".into(); // Set an invalid host to simulate no connection
+        let info_storage = PostgresInfoStorage::new(&config).unwrap();
         let file_info = FileInfo::new_test();
         
         let res = info_storage.set_info(&file_info, true).await;
