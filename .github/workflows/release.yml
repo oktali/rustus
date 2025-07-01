@@ -92,7 +92,7 @@ jobs:
           file: ./Dockerfile
           target: base
           platforms: linux/amd64
-          tags: ghcr.io/s3rius/rustus:latest,ghcr.io/s3rius/rustus:${{ github.ref_name }}
+          tags: ghcr.io/oktali/rustus:latest,ghcr.io/oktali/rustus:${{ github.ref_name }}
       - name: Build and push rootless
         uses: docker/build-push-action@v2
         with:
@@ -101,7 +101,7 @@ jobs:
           file: ./Dockerfile
           target: rootless
           platforms: linux/amd64
-          tags: ghcr.io/s3rius/rustus:${{ github.ref_name }}-rootless
+          tags: ghcr.io/oktali/rustus:${{ github.ref_name }}-rootless
 
   upload_helm:
     runs-on: ubuntu-latest
@@ -116,7 +116,6 @@ jobs:
           helm package --app-version "${{ github.ref_name }}" --dependency-update ./helm
           helm show chart *.tgz
           helm registry login -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}" ghcr.io
-          helm push *.tgz oci://ghcr.io/s3rius/charts
+          helm push *.tgz oci://ghcr.io/oktali/charts
         env:
           HELM_EXPERIMENTAL_OCI: 1
-
