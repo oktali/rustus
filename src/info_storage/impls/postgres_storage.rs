@@ -1,6 +1,6 @@
-use mobc::{Manager, Pool, async_trait};
+use mobc::{async_trait, Manager, Pool};
 use tokio_postgres::config::SslMode;
-use tokio_postgres::tls::{MakeTlsConnect, TlsConnect, NoTls};
+use tokio_postgres::tls::{MakeTlsConnect, NoTls, TlsConnect};
 use tokio_postgres::{Client, Config, Error, Socket};
 
 use crate::{
@@ -79,15 +79,21 @@ impl PostgresInfoStorage {
             .ssl_mode(SslMode::Disable);
         let manager = PgConnectionManager::new(pg_config.clone(), NoTls);
         let pool = mobc::Pool::builder().max_open(100).build(manager);
-        Ok(Self { pool, table_name: config.table_name.clone(), schema_name: config.schema_name.clone() })
+        Ok(Self {
+            pool,
+            table_name: config.table_name.clone(),
+            schema_name: config.schema_name.clone(),
+        })
     }
 }
 
 impl InfoStorage for PostgresInfoStorage {
     async fn prepare(&mut self) -> RustusResult<()> {
-        let create_table_query = format!(r#"
+        let create_table_query = format!(
+            r#"
         CREATE TABLE IF NOT EXISTS {}.{} (
-            id TEXT PRIMARY KEY,
+            id BIGINT PRIMARY KEY,
+            storage_id TEXT UNIQUE NOT NULL,
             "offset" BIGINT NOT NULL,
             length BIGINT,
             path TEXT,
@@ -98,7 +104,9 @@ impl InfoStorage for PostgresInfoStorage {
             parts TEXT[],
             storage TEXT NOT NULL,
             metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb
-        )"#, self.schema_name, self.table_name);
+        )"#,
+            self.schema_name, self.table_name
+        );
 
         let conn = self.pool.get().await?;
         conn.execute(&create_table_query, &[]).await?;
@@ -111,10 +119,13 @@ impl InfoStorage for PostgresInfoStorage {
 
         if create {
             // Insert new record
-            let query = format!(r#"
-            INSERT INTO {}.{} (id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata)
+            let query = format!(
+                r#"
+            INSERT INTO {}.{} (storage_id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            "#, self.schema_name, self.table_name);
+            "#,
+                self.schema_name, self.table_name
+            );
 
             let length_param: Option<i64> = file_info.length.map(|l| l as i64);
             let parts_param: Option<Vec<String>> = file_info.parts.clone();
@@ -134,10 +145,12 @@ impl InfoStorage for PostgresInfoStorage {
                     &file_info.storage,
                     &metadata_json,
                 ],
-            ).await?;
+            )
+            .await?;
         } else {
             // Update existing record
-            let query = format!(r#"
+            let query = format!(
+                r#"
             UPDATE {}.{} SET 
                 "offset" = $2,
                 length = $3,
@@ -149,28 +162,32 @@ impl InfoStorage for PostgresInfoStorage {
                 parts = $9,
                 storage = $10,
                 metadata = $11
-            WHERE id = $1
-            "#, self.schema_name, self.table_name);
+            WHERE storage_id = $1
+            "#,
+                self.schema_name, self.table_name
+            );
 
             let length_param: Option<i64> = file_info.length.map(|l| l as i64);
             let parts_param: Option<Vec<String>> = file_info.parts.clone();
 
-            let result = conn.execute(
-                &query,
-                &[
-                    &file_info.id,
-                    &(file_info.offset as i64),
-                    &length_param,
-                    &file_info.path,
-                    &file_info.created_at,
-                    &file_info.deferred_size,
-                    &file_info.is_partial,
-                    &file_info.is_final,
-                    &parts_param,
-                    &file_info.storage,
-                    &metadata_json,
-                ],
-            ).await?;
+            let result = conn
+                .execute(
+                    &query,
+                    &[
+                        &file_info.id,
+                        &(file_info.offset as i64),
+                        &length_param,
+                        &file_info.path,
+                        &file_info.created_at,
+                        &file_info.deferred_size,
+                        &file_info.is_partial,
+                        &file_info.is_final,
+                        &parts_param,
+                        &file_info.storage,
+                        &metadata_json,
+                    ],
+                )
+                .await?;
 
             if result == 0 {
                 return Err(RustusError::FileNotFound);
@@ -183,14 +200,17 @@ impl InfoStorage for PostgresInfoStorage {
     async fn get_info(&self, file_id: &str) -> RustusResult<FileInfo> {
         let conn = self.pool.get().await?;
 
-        let query = format!(r#"
-        SELECT id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata 
+        let query = format!(
+            r#"
+        SELECT storage_id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata 
         FROM {}.{}
-        WHERE id = $1
-        "#, self.schema_name, self.table_name);
+        WHERE storage_id = $1
+        "#,
+            self.schema_name, self.table_name
+        );
 
         let row = conn.query_opt(&query, &[&file_id]).await?;
-        
+
         match row {
             Some(row) => {
                 let id: String = row.get(0);
@@ -204,9 +224,10 @@ impl InfoStorage for PostgresInfoStorage {
                 let parts: Option<Vec<String>> = row.get(8);
                 let storage: String = row.get(9);
                 let metadata_json: serde_json::Value = row.get(10);
-                
-                let metadata: std::collections::HashMap<String, String> = serde_json::from_value(metadata_json)?;
-                
+
+                let metadata: std::collections::HashMap<String, String> =
+                    serde_json::from_value(metadata_json)?;
+
                 let file_info = FileInfo {
                     id,
                     offset: offset as usize,
@@ -220,7 +241,7 @@ impl InfoStorage for PostgresInfoStorage {
                     storage,
                     metadata,
                 };
-                
+
                 Ok(file_info)
             }
             None => Err(RustusError::FileNotFound),
@@ -230,10 +251,13 @@ impl InfoStorage for PostgresInfoStorage {
     async fn remove_info(&self, file_id: &str) -> RustusResult<()> {
         let conn = self.pool.get().await?;
 
-        let query = format!(r#"
+        let query = format!(
+            r#"
         DELETE FROM {}.{}
-        WHERE id = $1
-        "#, self.schema_name, self.table_name);
+        WHERE storage_id = $1
+        "#,
+            self.schema_name, self.table_name
+        );
 
         let result = conn.execute(&query, &[&file_id]).await?;
 
@@ -247,9 +271,9 @@ impl InfoStorage for PostgresInfoStorage {
 #[cfg(test)]
 mod tests {
 
-    use crate::{file_info::FileInfo, info_storage::base::InfoStorage};
     use super::PostgresInfoStorage;
     use super::PostgresInfoStorageConfig;
+    use crate::{file_info::FileInfo, info_storage::base::InfoStorage};
 
     fn get_config() -> PostgresInfoStorageConfig {
         PostgresInfoStorageConfig {
@@ -273,13 +297,13 @@ mod tests {
     async fn success() {
         let info_storage = get_storage().await;
         let file_info = FileInfo::new_test();
-        
+
         // Create a new file info
         info_storage.set_info(&file_info, true).await.unwrap();
-        
+
         // Retrieve the file info
         let file_info_from_storage = info_storage.get_info(file_info.id.as_str()).await.unwrap();
-        
+
         // Assert equality
         assert_eq!(file_info.id, file_info_from_storage.id);
         assert_eq!(file_info.path, file_info_from_storage.path);
@@ -292,7 +316,7 @@ mod tests {
         config.host = "invalid_host".into(); // Set an invalid host to simulate no connection
         let info_storage = PostgresInfoStorage::new(&config).unwrap();
         let file_info = FileInfo::new_test();
-        
+
         let res = info_storage.set_info(&file_info, true).await;
         assert!(res.is_err());
     }
@@ -300,11 +324,11 @@ mod tests {
     #[actix_rt::test]
     async fn unknown_id() {
         let info_storage = get_storage().await;
-        
+
         let res = info_storage
             .get_info(uuid::Uuid::new_v4().to_string().as_str())
             .await;
-        
+
         assert!(res.is_err());
     }
 
@@ -312,16 +336,15 @@ mod tests {
     async fn deletion_success() {
         let info_storage = get_storage().await;
         let file_info = FileInfo::new_test();
-        
+
         // Create a new file info
         info_storage.set_info(&file_info, true).await.unwrap();
-        
+
         // Delete the file info
         info_storage.remove_info(&file_info.id).await.unwrap();
-        
+
         // Try to get the deleted file info, should fail
         let res = info_storage.get_info(&file_info.id).await;
         assert!(res.is_err());
     }
 }
-
