@@ -1,6 +1,7 @@
 use mobc::{async_trait, Manager, Pool};
 use tokio_postgres::config::SslMode;
 use tokio_postgres::tls::{MakeTlsConnect, NoTls, TlsConnect};
+use tokio_postgres::types::{FromSql, ToSql};
 use tokio_postgres::{Client, Config, Error, Socket};
 
 use crate::{
@@ -102,7 +103,7 @@ impl InfoStorage for PostgresInfoStorage {
             is_partial BOOLEAN NOT NULL,
             is_final BOOLEAN NOT NULL,
             parts TEXT[],
-            storage TEXT NOT NULL,
+            storage api.files_storage_types NOT NULL,
             metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb
         )"#,
             self.schema_name, self.table_name
@@ -122,9 +123,11 @@ impl InfoStorage for PostgresInfoStorage {
             let query = format!(
                 r#"
             INSERT INTO {}.{} (storage_id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}', $10)
             "#,
-                self.schema_name, self.table_name
+                self.schema_name,
+                self.table_name,
+                file_info.storage.as_str()
             );
 
             let length_param: Option<i64> = file_info.length.map(|l| l as i64);
@@ -142,7 +145,6 @@ impl InfoStorage for PostgresInfoStorage {
                     &file_info.is_partial,
                     &file_info.is_final,
                     &parts_param,
-                    &file_info.storage,
                     &metadata_json,
                 ],
             )
@@ -160,11 +162,13 @@ impl InfoStorage for PostgresInfoStorage {
                 is_partial = $7,
                 is_final = $8,
                 parts = $9,
-                storage = $10,
-                metadata = $11
+                storage = '{}',
+                metadata = $10
             WHERE storage_id = $1
             "#,
-                self.schema_name, self.table_name
+                self.schema_name,
+                self.table_name,
+                file_info.storage.as_str()
             );
 
             let length_param: Option<i64> = file_info.length.map(|l| l as i64);
@@ -183,7 +187,6 @@ impl InfoStorage for PostgresInfoStorage {
                         &file_info.is_partial,
                         &file_info.is_final,
                         &parts_param,
-                        &file_info.storage,
                         &metadata_json,
                     ],
                 )
@@ -202,7 +205,7 @@ impl InfoStorage for PostgresInfoStorage {
 
         let query = format!(
             r#"
-        SELECT storage_id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage, metadata 
+        SELECT storage_id, "offset", length, path, created_at, deferred_size, is_partial, is_final, parts, storage::text, metadata 
         FROM {}.{}
         WHERE storage_id = $1
         "#,
